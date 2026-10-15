@@ -21,6 +21,7 @@ import static com.google.tsunami.callbackserver.common.CbidProcessor.extractCbid
 import static com.google.tsunami.callbackserver.common.CbidProcessor.extractCbidFromUrl;
 import static com.google.tsunami.callbackserver.server.common.RequestLogger.maybeGetClientAddrAsString;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.flogger.GoogleLogger;
 import com.google.protobuf.Message;
 import com.google.tsunami.callbackserver.proto.HttpInteractionResponse;
@@ -29,6 +30,7 @@ import com.google.tsunami.callbackserver.server.common.monitoring.TcsEventsObser
 import com.google.tsunami.callbackserver.storage.InteractionStore;
 import com.google.tsunami.callbackserver.storage.InteractionStore.InteractionType;
 import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.QueryStringDecoder;
 import java.net.InetAddress;
 import java.util.Optional;
 import javax.inject.Inject;
@@ -37,12 +39,31 @@ import javax.inject.Inject;
 final class HttpRecordingHandler extends HttpHandler {
   private static final String ENDPOINT_NAME = "RECORDING";
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+  private static final ImmutableList<String> REDIRECT_PARAMS =
+      ImmutableList.of("to", "redirect", "url");
   private final InteractionStore interactionStore;
 
   @Inject
   HttpRecordingHandler(InteractionStore interactionStore, TcsEventsObserver tcsEventsObserver) {
     super(ENDPOINT_NAME, tcsEventsObserver);
     this.interactionStore = interactionStore;
+  }
+
+  @Override
+  protected Optional<String> getRedirectUrl(FullHttpRequest request) {
+    try {
+      var decoder = new QueryStringDecoder(request.uri());
+      var params = decoder.parameters();
+      for (String paramName : REDIRECT_PARAMS) {
+        var values = params.get(paramName);
+        if (values != null && !values.isEmpty() && !isNullOrEmpty(values.get(0))) {
+          return Optional.of(values.get(0));
+        }
+      }
+    } catch (IllegalArgumentException e) {
+      logger.atInfo().withCause(e).log("Failed to parse URI for redirect: %s", request.uri());
+    }
+    return Optional.empty();
   }
 
   @Override
