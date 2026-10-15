@@ -227,6 +227,37 @@ public final class HttpRecordingHandlerTest {
     verify(eventsObserverMock).onHttpInteractionRecorded();
   }
 
+  @Test
+  public void channelRead0_whenRedirectParamToWithEncodedUrl_returnsDecodedLocation() {
+    String destination = "http://127.0.0.1:5000/api?param1=val1&param2=val2";
+    String encodedDestination = "http%3A%2F%2F127.0.0.1%3A5000%2Fapi%3Fparam1%3Dval1%26param2%3Dval2";
+    EmbeddedChannel channel = new EmbeddedChannel(handler);
+    DefaultFullHttpRequest request =
+        buildRequest("127.0.0.1", "/" + FAKE_CBID + "?to=" + encodedDestination);
+
+    channel.writeInbound(request);
+    FullHttpResponse response = channel.readOutbound();
+
+    assertThat(response.status()).isEqualTo(HttpResponseStatus.FOUND);
+    assertThat(response.headers().get(HttpHeaderNames.LOCATION)).isEqualTo(destination);
+    assertThat(interactionStore.get(FAKE_CBID)).containsExactly(FAKE_HTTP_INTERACTION);
+    verify(eventsObserverMock).onHttpInteractionRecorded();
+  }
+
+  @Test
+  public void channelRead0_whenRedirectParamIsEmpty_returnsOkStatus() {
+    EmbeddedChannel channel = new EmbeddedChannel(handler);
+    DefaultFullHttpRequest request = buildRequest("127.0.0.1", "/" + FAKE_CBID + "?to=");
+
+    channel.writeInbound(request);
+    FullHttpResponse response = channel.readOutbound();
+
+    assertThat(response.status()).isEqualTo(HttpResponseStatus.OK);
+    assertThat(response.headers().get(HttpHeaderNames.LOCATION)).isNull();
+    assertThat(interactionStore.get(FAKE_CBID)).containsExactly(FAKE_HTTP_INTERACTION);
+    verify(eventsObserverMock).onHttpInteractionRecorded();
+  }
+
   private static DefaultFullHttpRequest buildRequest(String host, String path) {
     DefaultFullHttpRequest request =
         new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, path);
