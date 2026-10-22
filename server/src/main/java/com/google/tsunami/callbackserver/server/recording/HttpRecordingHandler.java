@@ -22,7 +22,9 @@ import static com.google.tsunami.callbackserver.common.CbidProcessor.extractCbid
 import static com.google.tsunami.callbackserver.server.common.RequestLogger.maybeGetClientAddrAsString;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.GoogleLogger;
+import com.google.common.net.InetAddresses;
 import com.google.protobuf.Message;
 import com.google.tsunami.callbackserver.proto.HttpInteractionResponse;
 import com.google.tsunami.callbackserver.server.common.HttpHandler;
@@ -32,6 +34,8 @@ import com.google.tsunami.callbackserver.storage.InteractionStore.InteractionTyp
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import java.net.InetAddress;
+import java.net.URI;
+import java.util.Locale;
 import java.util.Optional;
 import javax.inject.Inject;
 
@@ -41,12 +45,35 @@ final class HttpRecordingHandler extends HttpHandler {
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
   private static final ImmutableList<String> REDIRECT_PARAMS =
       ImmutableList.of("to", "redirect", "url");
+  private static final ImmutableSet<String> APPROVED_REDIRECT_HOSTS =
+      ImmutableSet.of("localhost", "127.0.0.1", "::1", "[::1]");
   private final InteractionStore interactionStore;
 
   @Inject
   HttpRecordingHandler(InteractionStore interactionStore, TcsEventsObserver tcsEventsObserver) {
     super(ENDPOINT_NAME, tcsEventsObserver);
     this.interactionStore = interactionStore;
+  }
+
+  private static boolean isApprovedRedirectUrl(String urlString) {
+    try {
+      URI uri = URI.create(urlString);
+      String host = uri.getHost();
+      if (isNullOrEmpty(host)) {
+        return false;
+      }
+      String normalizedHost = host.toLowerCase(Locale.ROOT);
+      if (APPROVED_REDIRECT_HOSTS.contains(normalizedHost)) {
+        return true;
+      }
+      if (InetAddresses.isInetAddress(normalizedHost)) {
+        return InetAddresses.forString(normalizedHost).isLoopbackAddress();
+      }
+      return false;
+    } catch (IllegalArgumentException e) {
+      logger.atInfo().withCause(e).log("Failed to parse redirect URL: %s", urlString);
+      return false;
+    }
   }
 
   @Override
@@ -57,7 +84,12 @@ final class HttpRecordingHandler extends HttpHandler {
       for (String paramName : REDIRECT_PARAMS) {
         var values = params.get(paramName);
         if (values != null && !values.isEmpty() && !isNullOrEmpty(values.get(0))) {
-          return Optional.of(values.get(0));
+          String candidate = values.get(0);
+          if (isApprovedRedirectUrl(candidate)) {
+            return Optional.of(candidate);
+          } else {
+            logger.atInfo().log("Rejecting redirect to unapproved destination: %s", candidate);
+          }
         }
       }
     } catch (IllegalArgumentException e) {
